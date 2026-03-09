@@ -31,7 +31,11 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -344,6 +348,75 @@ public class AdminService {
     }
 
     // Removed generateRoomNumber, using user input now
+
+    public Map<String, Object> bulkImportRooms(org.springframework.web.multipart.MultipartFile file) {
+        Map<String, Object> result = new HashMap<>();
+        List<String> errors = new java.util.ArrayList<>();
+        int successCount = 0;
+        int failureCount = 0;
+
+        try (java.io.BufferedReader br = new java.io.BufferedReader(
+                new java.io.InputStreamReader(file.getInputStream()))) {
+            String line;
+            int lineNumber = 0;
+            while ((line = br.readLine()) != null) {
+                lineNumber++;
+                if (lineNumber == 1)
+                    continue; // Skip header
+
+                try {
+                    // Split by comma, ignoring commas in quotes
+                    String[] data = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", -1);
+                    if (data.length < 7) {
+                        throw new IllegalArgumentException(
+                                "Insufficient columns. Expected: RoomNumber, RoomType, Price, Amenities, Floor, RoomSize, Description");
+                    }
+
+                    CreateRoomRequest request = new CreateRoomRequest();
+                    request.setRoomNumber(data[0].trim());
+                    request.setRoomType(com.pg.enums.RoomType.valueOf(data[1].trim().toUpperCase()));
+                    request.setPrice(new java.math.BigDecimal(data[2].trim()));
+
+                    // Amenities: Semicolon separated
+                    if (data[3] != null && !data[3].trim().isEmpty()) {
+                        String amenitiesStr = data[3].replace("\"", "").trim();
+                        request.setAmenities(List.of(amenitiesStr.split(";")));
+                    } else {
+                        request.setAmenities(List.of());
+                    }
+
+                    request.setFloor(Integer.parseInt(data[4].trim()));
+                    request.setRoomSize(Integer.parseInt(data[5].trim()));
+                    request.setDescription(data[6].replace("\"", "").trim());
+                    request.setAvailability(data.length > 7 ? Boolean.parseBoolean(data[7].trim()) : true);
+                    request.setImages(List.of()); // Default empty images
+
+                    addRoom(request);
+                    successCount++;
+                } catch (Exception e) {
+                    failureCount++;
+                    errors.add("Line " + lineNumber + ": " + e.getMessage());
+                }
+            }
+        } catch (java.io.IOException e) {
+            throw new InvalidRequestException("Failed to read CSV file: " + e.getMessage());
+        }
+
+        result.put("processed", successCount + failureCount);
+        result.put("success", successCount);
+        result.put("failure", failureCount);
+        result.put("errors", errors);
+        return result;
+    }
+
+    public byte[] getRoomTemplate() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("RoomNumber,RoomType,Price,Amenities,Floor,RoomSize,Description,Availability\n");
+        sb.append("101,SINGLE_SHARING,5000,\"Wi-Fi;Air Conditioning\",1,150,\"Spacious single room\",true\n");
+        sb.append("102,DOUBLE_SHARING,3500,\"Wi-Fi;TV\",1,200,\"Comfortable double sharing\",true\n");
+        sb.append("103,TRIPLE_SHARING,2500,\"Wi-Fi\",2,250,\"Budget triple sharing\",true\n");
+        return sb.toString().getBytes();
+    }
 
     private RoomResponse mapToRoomResponse(Room room) {
         RoomResponse response = new RoomResponse();

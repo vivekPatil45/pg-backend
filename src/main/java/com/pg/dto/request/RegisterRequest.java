@@ -27,10 +27,13 @@ public class RegisterRequest {
     private String name;
 
     @NotBlank(message = "Mobile number is required")
-    @Pattern(regexp = "^\\+\\d{1,3}-\\d{8,11}$", message = "Enter a valid mobile number (format: +CountryCode-Number).")
+    @Pattern(regexp = "^(\\+91[\\-\\s]?)?[6789]\\d{9}$", message = "Please enter a valid 10-digit Indian mobile number (e.g., 9876543210 or +91-9876543210). Numbers starting with 0 or dummy values like 0000000000 are not allowed.")
     private String phone;
 
     @NotBlank(message = "Address is required")
     @Size(min = 10, message = "Address must be at least 10 characters long.")
     private String address;
+
+    @NotBlank(message = "ID Proof (Aadhar/PAN/Voter ID) is required")
+    private String idProof;
 }

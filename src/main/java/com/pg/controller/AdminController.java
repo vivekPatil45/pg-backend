@@ -29,6 +29,9 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -144,6 +147,22 @@ public class AdminController {
         public ResponseEntity<ApiResponse<String>> deleteRoom(@PathVariable String roomId) {
                 adminService.deleteRoom(roomId);
                 return ResponseEntity.ok(ApiResponse.success("Room deleted successfully", null));
+        }
+
+        @PostMapping("/rooms/bulk-import")
+        public ResponseEntity<ApiResponse<Map<String, Object>>> bulkImportRooms(
+                        @RequestParam("file") MultipartFile file) {
+                Map<String, Object> result = adminService.bulkImportRooms(file);
+                return ResponseEntity.ok(ApiResponse.success("Bulk import completed", result));
+        }
+
+        @GetMapping("/rooms/template")
+        public ResponseEntity<byte[]> downloadTemplate() {
+                byte[] template = adminService.getRoomTemplate();
+                return ResponseEntity.ok()
+                                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=rooms_template.csv")
+                                .contentType(MediaType.parseMediaType("text/csv"))
+                                .body(template);
         }
 
         // ============ COMPLAINT MANAGEMENT ============

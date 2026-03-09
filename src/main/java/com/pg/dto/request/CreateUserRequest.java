@@ -21,7 +21,7 @@ public class CreateUserRequest {
     private String name;
 
     @NotBlank(message = "Mobile number is required")
-    @Pattern(regexp = "^\\+?[0-9\\-\\s]{10,20}$", message = "Enter a valid mobile number (10-20 digits, optional +, -, spaces)")
+    @Pattern(regexp = "^(\\+91[\\-\\s]?)?[6789]\\d{9}$", message = "Please enter a valid 10-digit Indian mobile number (e.g., 9876543210 or +91-9876543210). Numbers starting with 0 or dummy values like 0000000000 are not allowed.")
     private String phone;
 
     @Size(min = 10, max = 200, message = "Address must be between 10 and 200 characters")

@@ -76,6 +76,7 @@ public class AuthService {
         tenant.setTenantId(idGenerator.generateTenantId());
         tenant.setUser(savedUser);
         tenant.setTotalBookings(0);
+        tenant.setIdProof(request.getIdProof());
 
         tenantRepository.save(tenant);
 
@@ -170,7 +171,7 @@ public class AuthService {
         adminUser.setEmail("admin@hotel.com");
         adminUser.setPassword(passwordEncoder.encode("admin123"));
         adminUser.setName("Demo Admin");
-        adminUser.setPhone("+91-8888888888");
+        adminUser.setPhone("9876543210");
         adminUser.setAddress("Hotel Address");
         adminUser.setRole(UserRole.ADMIN);
         adminUser.setStatus(UserStatus.ACTIVE);
