@@ -38,10 +38,9 @@ public class BillService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
 
-        // Avoid duplicate bill
-        try {
-            return getBillByBookingId(bookingId);
-        } catch (ResourceNotFoundException ignored) {
+        // Avoid duplicate bill for the initial booking bill
+        if (billRepository.findFirstByBooking_BookingIdOrderByCreatedAtAsc(bookingId).isPresent()) {
+            return billRepository.findFirstByBooking_BookingIdOrderByCreatedAtAsc(bookingId).get();
         }
 
         Bill bill = new Bill();
@@ -77,8 +76,48 @@ public class BillService {
     }
 
     public Bill getBillByBookingId(String bookingId) {
-        return billRepository.findByBooking_BookingId(bookingId)
+        return billRepository.findFirstByBooking_BookingIdOrderByCreatedAtAsc(bookingId)
                 .orElseThrow(() -> new ResourceNotFoundException("Bill not found for booking: " + bookingId));
+    }
+
+    /**
+     * Generates a BRAND NEW monthly rent bill for recurring payment.
+     * Unlike generateBill(), this always creates a new bill entry.
+     */
+    @Transactional
+    public Bill generateMonthlyRentBill(String bookingId) {
+        Booking booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
+
+        Bill bill = new Bill();
+        bill.setBillId(idGenerator.generateBillId());
+        bill.setBooking(booking);
+        bill.setTenant(booking.getTenant());
+        bill.setBillDate(LocalDate.now());
+        bill.setDueDate(LocalDate.now().plusDays(7));
+        bill.setPaymentStatus(PaymentStatus.PENDING);
+
+        List<BillItem> items = new ArrayList<>();
+        BillItem roomCharge = new BillItem();
+        roomCharge.setItemId(idGenerator.generateItemId());
+        roomCharge.setDescription("Monthly Rent - Room " + booking.getRoom().getRoomNumber()
+                + " (" + LocalDate.now().getMonth() + " " + LocalDate.now().getYear() + ")");
+        roomCharge.setCategory(BillItemCategory.ROOM);
+        roomCharge.setQuantity(1);
+        roomCharge.setUnitPrice(booking.getRoom().getPrice());
+        roomCharge.setTotalPrice(booking.getRoom().getPrice());
+        items.add(roomCharge);
+
+        bill.setItems(items);
+        bill.setSubtotal(booking.getRoom().getPrice());
+        bill.setTaxRate(BigDecimal.ZERO);
+        bill.setTaxAmount(BigDecimal.ZERO);
+        bill.setDiscountAmount(BigDecimal.ZERO);
+        bill.setTotalAmount(booking.getRoom().getPrice());
+        bill.setPaidAmount(BigDecimal.ZERO);
+        bill.setBalanceAmount(booking.getRoom().getPrice());
+
+        return billRepository.save(bill);
     }
 
     public Bill getBillByReservationId(String bookingId) {

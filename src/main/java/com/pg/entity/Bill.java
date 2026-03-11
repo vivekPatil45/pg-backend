@@ -26,8 +26,8 @@ public class Bill {
     @Column(length = 20)
     private String billId;
 
-    @OneToOne
-    @JoinColumn(name = "reservation_id", nullable = false, unique = true)
+    @ManyToOne
+    @JoinColumn(name = "reservation_id", nullable = false)
     @com.fasterxml.jackson.annotation.JsonIgnoreProperties("bill")
     private Booking booking;
 

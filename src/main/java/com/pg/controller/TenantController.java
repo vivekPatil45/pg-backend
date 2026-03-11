@@ -38,9 +38,12 @@ public class TenantController {
         private final UserRepository userRepository;
         private final com.pg.repository.TenantRepository tenantRepository;
         private final com.pg.repository.BillRepository billRepository;
+        private final com.pg.repository.BedRepository bedRepository;
+
+        private final com.pg.service.BillService billService;
 
         @GetMapping("/active-stay")
-        public ResponseEntity<ApiResponse<Booking>> getActiveStay(Authentication authentication) {
+        public ResponseEntity<ApiResponse<Map<String, Object>>> getActiveStay(Authentication authentication) {
                 UserDetails userDetails = (UserDetails) authentication.getPrincipal();
                 User user = userRepository.findByUsername(userDetails.getUsername())
                                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
@@ -52,13 +55,58 @@ public class TenantController {
                 // Find most recent active or confirmed booking
                 List<com.pg.enums.BookingStatus> activeStatuses = List.of(
                                 com.pg.enums.BookingStatus.CONFIRMED,
-                                com.pg.enums.BookingStatus.ACTIVE);
+                                com.pg.enums.BookingStatus.ACTIVE,
+                                com.pg.enums.BookingStatus.PENDING,
+                                com.pg.enums.BookingStatus.PENDING_PAYMENT);
 
                 Booking activeBooking = bookingRepository.findFirstByTenant_TenantIdAndStatusInOrderByCreatedAtDesc(
                                 tenant.getTenantId(), activeStatuses)
                                 .orElse(null);
 
-                return ResponseEntity.ok(ApiResponse.success("Active stay retrieved", activeBooking));
+                var assignedBed = bedRepository.findByTenant_TenantId(tenant.getTenantId()).orElse(null);
+
+                if (activeBooking == null) {
+                        if (assignedBed != null) {
+                                Map<String, Object> response = new HashMap<>();
+                                response.put("bookingId", "ADMIN_ASSIGNED");
+                                response.put("userId", user.getUserId());
+                                response.put("roomId", assignedBed.getRoom().getRoomId());
+                                response.put("room", assignedBed.getRoom());
+                                response.put("tenant", tenant);
+                                response.put("moveInDate", tenant.getCheckInDate() != null ? tenant.getCheckInDate() : java.time.LocalDate.now());
+                                response.put("status", com.pg.enums.BookingStatus.ACTIVE);
+                                response.put("paymentStatus", com.pg.enums.PaymentStatus.PAID);
+                                response.put("totalAmount", assignedBed.getRoom().getPrice());
+                                response.put("bedId", assignedBed.getBedId());
+                                response.put("bedNumber", assignedBed.getBedNumber());
+                                return ResponseEntity.ok(ApiResponse.success("Active stay retrieved", response));
+                        }
+                        return ResponseEntity.ok(ApiResponse.success("No active stay", null));
+                }
+
+                // Look up assigned bed for this tenant in this room
+                Map<String, Object> response = new HashMap<>();
+                response.put("bookingId", activeBooking.getBookingId());
+                response.put("userId", user.getUserId());
+                response.put("roomId", activeBooking.getRoom().getRoomId());
+                response.put("room", activeBooking.getRoom());
+                response.put("tenant", activeBooking.getTenant());
+                response.put("moveInDate", activeBooking.getMoveInDate());
+                response.put("status", activeBooking.getStatus());
+                response.put("paymentStatus", activeBooking.getPaymentStatus());
+                response.put("paymentMethod", activeBooking.getPaymentMethod());
+                response.put("transactionId", activeBooking.getTransactionId());
+                response.put("totalAmount", activeBooking.getTotalAmount());
+                response.put("createdAt", activeBooking.getCreatedAt());
+                response.put("updatedAt", activeBooking.getUpdatedAt());
+
+                // Include assigned bed info
+                if (assignedBed != null && assignedBed.getRoom().getRoomId().equals(activeBooking.getRoom().getRoomId())) {
+                        response.put("bedId", assignedBed.getBedId());
+                        response.put("bedNumber", assignedBed.getBedNumber());
+                }
+
+                return ResponseEntity.ok(ApiResponse.success("Active stay retrieved", response));
         }
 
         @GetMapping("/bills")
@@ -129,6 +177,57 @@ public class TenantController {
                 userRepository.save(user);
 
                 return ResponseEntity.ok(ApiResponse.success("Profile updated successfully", buildUserResponse(user)));
+        }
+
+        @PostMapping("/bookings/{bookingId}/pay-rent")
+        public ResponseEntity<ApiResponse<Map<String, Object>>> payRent(
+                        @PathVariable String bookingId,
+                        @RequestBody Map<String, String> requestBody,
+                        Authentication authentication) {
+
+                UserDetails userDetails = (UserDetails) authentication.getPrincipal();
+                User user = userRepository.findByUsername(userDetails.getUsername())
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+                Booking booking = bookingRepository.findById(bookingId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Booking not found"));
+
+                if (!booking.getTenant().getUser().getUserId().equals(user.getUserId())) {
+                        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied");
+                }
+
+                if (booking.getStatus() == com.pg.enums.BookingStatus.CANCELLED
+                                || booking.getStatus() == com.pg.enums.BookingStatus.COMPLETED) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "Cannot pay rent for a cancelled or completed booking.");
+                }
+
+                // Determine payment method
+                String methodStr = requestBody.getOrDefault("paymentMethod", "UPI");
+                String transactionId = requestBody.getOrDefault("transactionId",
+                                "TXN_" + java.util.UUID.randomUUID().toString().substring(0, 9).toUpperCase());
+                com.pg.enums.PaymentMethod paymentMethod;
+                try {
+                        paymentMethod = com.pg.enums.PaymentMethod.valueOf(methodStr);
+                } catch (IllegalArgumentException e) {
+                        paymentMethod = com.pg.enums.PaymentMethod.UPI;
+                }
+
+                // Generate a new monthly rent bill (if one doesn't exist for this month)
+                com.pg.entity.Bill newBill = billService.generateMonthlyRentBill(bookingId);
+                com.pg.entity.Bill paidBill = billService.updatePayment(newBill.getBillId(),
+                                newBill.getTotalAmount(), paymentMethod);
+                paidBill.setTransactionId(transactionId);
+                billService.getBillRepository().save(paidBill);
+
+                Map<String, Object> data = new HashMap<>();
+                data.put("billId", paidBill.getBillId());
+                data.put("amount", paidBill.getTotalAmount());
+                data.put("paymentStatus", paidBill.getPaymentStatus());
+                data.put("transactionId", transactionId);
+                data.put("message", "Rent paid successfully!");
+
+                return ResponseEntity.ok(ApiResponse.success("Rent payment processed successfully", data));
         }
 
         @PostMapping("/bookings")

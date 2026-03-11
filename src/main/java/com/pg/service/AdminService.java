@@ -18,6 +18,7 @@ import com.pg.exception.InvalidRequestException;
 import com.pg.exception.ResourceNotFoundException;
 
 import com.pg.repository.BedRepository;
+import com.pg.repository.BillRepository;
 import com.pg.repository.BookingRepository;
 import com.pg.repository.ComplaintRepository;
 import com.pg.repository.RoomRepository;
@@ -56,6 +57,8 @@ public class AdminService {
     private final UserRepository userRepository;
     private final TenantRepository tenantRepository;
     private final BookingService bookingService;
+    private final BedService bedService;
+    private final BillRepository billRepository;
     private final IdGenerator idGenerator;
 
     public Map<String, Object> getDashboardStatistics() {
@@ -304,33 +307,92 @@ public class AdminService {
         Room room = roomRepository.findById(roomId)
                 .orElseThrow(() -> new ResourceNotFoundException("Room not found"));
 
-        List<Booking> activeBookings = bookingRepository.findByRoomAndStatusIn(
-                room, List.of(BookingStatus.CONFIRMED, BookingStatus.ACTIVE));
-        if (!activeBookings.isEmpty()) {
-            throw new InvalidRequestException("Room is already occupied.");
+        // Per-bed availability check: is there at least one free bed?
+        long availableBedCount = bedRepository.countByRoomAndStatus(room, BedStatus.AVAILABLE);
+        if (!room.getAvailability() || availableBedCount == 0) {
+            throw new InvalidRequestException("Room has no available beds. All beds are currently occupied.");
+        }
+
+        // Prevent tenant from being assigned to two rooms simultaneously
+        var existingActiveBookings = bookingRepository.findByTenant_TenantIdAndStatusIn(
+                tenant.getTenantId(),
+                java.util.List.of(BookingStatus.CONFIRMED, BookingStatus.ACTIVE));
+        if (!existingActiveBookings.isEmpty()) {
+            throw new InvalidRequestException("This tenant already has an active booking.");
         }
 
         Booking booking = new Booking();
         booking.setBookingId(idGenerator.generateBookingId());
         booking.setTenant(tenant);
         booking.setRoom(room);
-        booking.setMoveInDate(moveInDate);
+        booking.setMoveInDate(moveInDate != null ? moveInDate : LocalDate.now());
         booking.setTotalAmount(room.getPrice());
         booking.setStatus(BookingStatus.CONFIRMED);
         booking.setPaymentStatus(PaymentStatus.PAID);
-        if (paymentMethod != null) {
-            booking.setPaymentMethod(PaymentMethod.valueOf(paymentMethod.toUpperCase()));
+        if (paymentMethod != null && !paymentMethod.isBlank()) {
+            try {
+                booking.setPaymentMethod(PaymentMethod.valueOf(paymentMethod.toUpperCase()));
+            } catch (IllegalArgumentException ignored) {}
         }
 
-        // Auto-assign available bed in the room
+        Booking savedBooking = bookingRepository.save(booking);
+
+        // Auto-assign available bed + sync room availability
         bedRepository.findFirstByRoomAndStatusOrderByBedNumberAsc(room, BedStatus.AVAILABLE)
                 .ifPresent(bed -> {
                     bed.setTenant(tenant);
                     bed.setStatus(BedStatus.OCCUPIED);
                     bedRepository.save(bed);
+                    bedService.syncRoomAvailability(bed.getRoom());  // <-- Updates room.availability
+                    savedBooking.setRequestedBedId(bed.getBedId());
                 });
 
-        return bookingRepository.save(booking);
+        bookingRepository.save(savedBooking);
+
+        // Generate and mark bill as PAID (admin assignment means payment is done)
+        try {
+            buildPaidBill(savedBooking, paymentMethod);
+        } catch (Exception ignored) { // Non-critical: billing errors shouldn't fail assignment
+        }
+
+        // Increment tenant's total bookings
+        tenant.setTotalBookings(tenant.getTotalBookings() + 1);
+        tenantRepository.save(tenant);
+
+        return savedBooking;
+    }
+
+    private com.pg.entity.Bill buildPaidBill(Booking booking, String paymentMethod) {
+        com.pg.entity.Bill bill = new com.pg.entity.Bill();
+        bill.setBillId(idGenerator.generateBillId());
+        bill.setBooking(booking);
+        bill.setTenant(booking.getTenant());
+        bill.setBillDate(LocalDate.now());
+        bill.setDueDate(LocalDate.now());
+        bill.setPaymentStatus(PaymentStatus.PAID);
+        if (paymentMethod != null && !paymentMethod.isBlank()) {
+            try { bill.setPaymentMethod(PaymentMethod.valueOf(paymentMethod.toUpperCase())); } catch (Exception ignored) {}
+        }
+
+        java.util.List<com.pg.entity.BillItem> items = new java.util.ArrayList<>();
+        com.pg.entity.BillItem item = new com.pg.entity.BillItem();
+        item.setItemId(idGenerator.generateItemId());
+        item.setDescription("Monthly Rent - Room " + booking.getRoom().getRoomNumber() + " (Admin Assigned)");
+        item.setCategory(com.pg.enums.BillItemCategory.ROOM);
+        item.setQuantity(1);
+        item.setUnitPrice(booking.getRoom().getPrice());
+        item.setTotalPrice(booking.getRoom().getPrice());
+        items.add(item);
+
+        bill.setItems(items);
+        bill.setSubtotal(booking.getRoom().getPrice());
+        bill.setTaxRate(java.math.BigDecimal.ZERO);
+        bill.setTaxAmount(java.math.BigDecimal.ZERO);
+        bill.setDiscountAmount(java.math.BigDecimal.ZERO);
+        bill.setTotalAmount(booking.getRoom().getPrice());
+        bill.setPaidAmount(booking.getRoom().getPrice());
+        bill.setBalanceAmount(java.math.BigDecimal.ZERO);
+        return billRepository.save(bill);
     }
 
     @Transactional
@@ -444,10 +506,10 @@ public class AdminService {
                 room, List.of(BookingStatus.CONFIRMED, BookingStatus.ACTIVE)).size();
         boolean hasActive = activeBookingsCount > 0;
         response.setHasActiveReservations(hasActive);
-        if (!room.getAvailability()) {
-            response.setCurrentStatus("MAINTENANCE");
-        } else if (available == 0) {
+        if (available == 0) {
             response.setCurrentStatus("FULL");
+        } else if (!room.getAvailability()) {
+            response.setCurrentStatus("MAINTENANCE");
         } else {
             response.setCurrentStatus("AVAILABLE");
         }

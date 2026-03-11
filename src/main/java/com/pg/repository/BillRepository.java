@@ -11,11 +11,14 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
 public interface BillRepository extends JpaRepository<Bill, String>, JpaSpecificationExecutor<Bill> {
-        Optional<Bill> findByBooking_BookingId(String bookingId);
+        List<Bill> findByBooking_BookingId(String bookingId);
+
+        Optional<Bill> findFirstByBooking_BookingIdOrderByCreatedAtAsc(String bookingId);
 
         Page<Bill> findByTenant_TenantId(String tenantId, Pageable pageable);
 

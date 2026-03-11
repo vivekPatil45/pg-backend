@@ -34,6 +34,7 @@ public class RegisterRequest {
     @Size(min = 10, message = "Address must be at least 10 characters long.")
     private String address;
 
-    @NotBlank(message = "ID Proof (Aadhar/PAN/Voter ID) is required")
+    @NotBlank(message = "Aadhaar Number is required")
+    @Pattern(regexp = "^[2-9][0-9]{11}$", message = "Please enter a valid 12-digit Aadhaar number")
     private String idProof;
 }

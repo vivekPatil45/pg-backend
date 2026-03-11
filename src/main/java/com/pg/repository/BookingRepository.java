@@ -60,4 +60,6 @@ public interface BookingRepository extends JpaRepository<Booking, String>, JpaSp
 
         java.util.Optional<Booking> findFirstByTenant_TenantIdAndStatusInOrderByCreatedAtDesc(String tenantId,
                         List<BookingStatus> statuses);
+
+        List<Booking> findByTenant_TenantIdAndStatusIn(String tenantId, List<BookingStatus> statuses);
 }

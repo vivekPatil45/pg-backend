@@ -57,7 +57,7 @@ public class AdminBillController {
         return ResponseEntity.ok(ApiResponse.success("Payment marked as received", response));
     }
 
-    @PostMapping("/receipt/{billId}")
+    @PostMapping("/{billId}/receipt")
     public ResponseEntity<ApiResponse<AdminBillResponse>> generateReceipt(@PathVariable String billId) {
         AdminBillResponse response = adminBillService.generateReceipt(billId);
         return ResponseEntity.ok(ApiResponse.success("Receipt generated successfully", response));

@@ -64,16 +64,28 @@ public class BookingService {
             throw new InvalidRequestException("Move-in date cannot be in the past.");
         }
 
-        // Check room availability
+        // Check room availability - at least one bed must be free
         if (!room.getAvailability()) {
-            throw new InvalidRequestException("Room is not available for booking.");
+            throw new InvalidRequestException("Room has no available beds. Please choose another room.");
         }
 
-        // Check for existing active bookings for this room
-        var activeBookings = bookingRepository.findByRoomAndStatusIn(
-                room, java.util.List.of(BookingStatus.CONFIRMED, BookingStatus.ACTIVE));
-        if (!activeBookings.isEmpty()) {
-            throw new InvalidRequestException("Room is already occupied.");
+        // Check if the tenant already has an active booking
+        var tenantActiveBooking = bookingRepository.findByTenant_TenantIdAndStatusIn(
+                tenant.getTenantId(), java.util.List.of(BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.ACTIVE));
+        if (!tenantActiveBooking.isEmpty()) {
+            throw new InvalidRequestException("You already have an active booking. Please cancel it before making a new one.");
+        }
+
+        // If a specific bed is requested, check that bed is available
+        if (request.getBedId() != null && !request.getBedId().isEmpty()) {
+            bedRepository.findById(request.getBedId()).ifPresent(bed -> {
+                if (bed.getStatus() != BedStatus.AVAILABLE) {
+                    throw new InvalidRequestException("The selected bed is no longer available. Please choose another bed.");
+                }
+                if (!bed.getRoom().getRoomId().equals(room.getRoomId())) {
+                    throw new InvalidRequestException("The selected bed does not belong to this room.");
+                }
+            });
         }
 
         // First month's rent is the total amount
@@ -176,18 +188,29 @@ public class BookingService {
 
         Booking savedBooking = bookingRepository.save(booking);
 
-        // Auto-assign requested bed in the room
+        // Auto-assign requested bed in the room — mark as OCCUPIED
         if (booking.getRequestedBedId() != null && !booking.getRequestedBedId().isEmpty()) {
             bedRepository.findById(booking.getRequestedBedId())
                     .ifPresent(bed -> {
                         if (bed.getStatus() == BedStatus.AVAILABLE
                                 && bed.getRoom().getRoomId().equals(booking.getRoom().getRoomId())) {
                             bed.setTenant(booking.getTenant());
-                            bed.setStatus(BedStatus.RESERVED);
+                            bed.setStatus(BedStatus.OCCUPIED);
                             bedRepository.save(bed);
                             bedService.syncRoomAvailability(bed.getRoom());
                         }
                     });
+        } else {
+            // No specific bed requested — auto-assign the first available bed
+            java.util.List<com.pg.entity.Bed> availableBeds = bedRepository.findByRoomAndStatusOrderByBedNumberAsc(
+                    booking.getRoom(), BedStatus.AVAILABLE);
+            if (!availableBeds.isEmpty()) {
+                com.pg.entity.Bed firstAvailable = availableBeds.get(0);
+                firstAvailable.setTenant(booking.getTenant());
+                firstAvailable.setStatus(BedStatus.OCCUPIED);
+                bedRepository.save(firstAvailable);
+                bedService.syncRoomAvailability(firstAvailable.getRoom());
+            }
         }
 
         // Generate the bill for Admin tracking
@@ -199,6 +222,8 @@ public class BookingService {
             bill.setPaymentMethod(paymentMethod);
             bill.setTransactionId(transactionId);
             bill.setPaymentStatus(PaymentStatus.PAID);
+            bill.setPaidAmount(savedBooking.getTotalAmount());  // full amount paid
+            bill.setBalanceAmount(java.math.BigDecimal.ZERO);  // no outstanding balance
             billService.getBillRepository().save(bill);
         }
 
